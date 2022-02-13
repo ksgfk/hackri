@@ -1,0 +1,8 @@
+.DS_Store
+.git
+.vscode
+.vs
+.idea
+.clion
+
+build
