@@ -191,6 +191,7 @@ static void SutherlandHodgemanAlgo(
     size_t curr = i;
     bool isPrevInside = IsInsidePlane(inPos[prev], plane);
     bool isCurrInside = IsInsidePlane(inPos[curr], plane);
+    //其中一个点在外部，求出交点信息，放入下一步
     if (isPrevInside != isCurrInside) {
       float ratio = IntersectRatio(inPos[prev], inPos[curr], plane);
       Span<uint8_t> newPoint = memory.AllocToSpan<uint8_t>(length);
@@ -201,6 +202,7 @@ static void SutherlandHodgemanAlgo(
       outPos.emplace_back(Lerp(ratio, inPos[prev], inPos[curr]));
       outOut.emplace_back(newPoint);
     }
+    //当前点在内部，肯定得放入下一步
     if (isCurrInside) {
       outPos.emplace_back(inPos[curr]);
       outOut.emplace_back(inOut[curr]);
@@ -245,26 +247,84 @@ static std::tuple<size_t, std::pmr::vector<Vector4f>, std::pmr::vector<Span<uint
   }
   return std::make_tuple(outputPos.size(), std::move(outputPos), std::move(outputOut));
 }
-constexpr static bool DepthTest(float depth, float target, DepthComparison func) noexcept {
+constexpr static bool TestImpl(float depth, float target, TestComparison func) noexcept {
   switch (func) {
-    case hackri::DepthComparison::Never:
+    case hackri::TestComparison::Never:
       return false;
-    case hackri::DepthComparison::Less:
+    case hackri::TestComparison::Less:
       return depth < target;
-    case hackri::DepthComparison::Equal:
+    case hackri::TestComparison::Equal:
       return std::abs(depth - target) <= float(1e-5);
-    case hackri::DepthComparison::LessEqual:
+    case hackri::TestComparison::LessEqual:
       return depth <= target;
-    case hackri::DepthComparison::Greater:
+    case hackri::TestComparison::Greater:
       return depth > target;
-    case hackri::DepthComparison::NotEqual:
+    case hackri::TestComparison::NotEqual:
       return std::abs(depth - target) > float(1e-5);
-    case hackri::DepthComparison::GreaterEqual:
+    case hackri::TestComparison::GreaterEqual:
       return depth >= target;
-    case hackri::DepthComparison::Always:
+    case hackri::TestComparison::Always:
       return true;
     default:
       return false;
+  }
+}
+constexpr static Color4f GetBlendFactor(const Color4f& src, const Color4f& dst, const Color4f& c, BlendColor type) noexcept {
+  switch (type) {
+    case hackri::BlendColor::Zero:
+      return Color4f(0.0f);
+    case hackri::BlendColor::One:
+      return Color4f(1.0f);
+    case hackri::BlendColor::SrcColor:
+      return src;
+    case hackri::BlendColor::OneMinusSrcColor:
+      return Color4f(1.0f) - src;
+    case hackri::BlendColor::DstColor:
+      return dst;
+    case hackri::BlendColor::OneMinusDstColor:
+      return Color4f(1.0f) - dst;
+    case hackri::BlendColor::SrcAlpha:
+      return Color4f(src.A());
+    case hackri::BlendColor::OneMinusSrcAlpha:
+      return Color4f(1.0f) - Color4f(src.A());
+    case hackri::BlendColor::DstAlpha:
+      return Color4f(dst.A());
+    case hackri::BlendColor::OneMinusDstAlpha:
+      return Color4f(1.0f) - Color4f(dst.A());
+    case hackri::BlendColor::ConstantColor:
+      return c;
+    case hackri::BlendColor::OneMinusConstantColor:
+      return Color4f(1.0f) - c;
+    case hackri::BlendColor::ConstantAlpha:
+      return Color4f(c.A());
+    case hackri::BlendColor::OneMinusConstantAlpha:
+      return Color4f(1.0f) - Color4f(c.A());
+    default:
+      return Color4f(0.0f);
+  }
+}
+constexpr static Color4f Blend(
+    const PipelineState& pso,
+    const Color4f& src, const Color4f& dst) noexcept {
+  Color3f srcRgbFactor = GetBlendFactor(src, dst, pso.BlendColorConstant, pso.BlendSrcFactorRGB).XYZ();
+  Color3f dstRgbFactor = GetBlendFactor(src, dst, pso.BlendColorConstant, pso.BlendDstFactorRGB).XYZ();
+  float srcAFactor = GetBlendFactor(src, dst, pso.BlendColorConstant, pso.BlendSrcFactorA).A();
+  float dstAFactor = GetBlendFactor(src, dst, pso.BlendColorConstant, pso.BlendDstFactorA).A();
+  switch (pso.BlendOp) {
+    case hackri::BlendEquation::Add:
+      return Color4f(
+          src.XYZ() * srcRgbFactor + dst.XYZ() * dstRgbFactor,
+          src.A() * srcAFactor + dst.A() * dstAFactor);
+    case hackri::BlendEquation::Sub:
+      return Color4f(
+          src.XYZ() * srcRgbFactor - dst.XYZ() * dstRgbFactor,
+          src.A() * srcAFactor - dst.A() * dstAFactor);
+    case hackri::BlendEquation::RevSub:
+      return Color4f(
+          dst.XYZ() * dstRgbFactor - src.XYZ() * srcRgbFactor,
+          dst.A() * dstAFactor - src.A() * srcAFactor);
+    default:
+      return Color4f(0.0f);
   }
 }
 static void DrawInterpolateLine(
@@ -277,13 +337,28 @@ static void DrawInterpolateLine(
   auto depthTestAndWrite = [&](float delta, uint32_t x, uint32_t y) -> void {
     if (input.DepthBuffer != nullptr) {
       float depth = Lerp(delta, depthA, depthB);
-      if (!DepthTest(depth, (*input.DepthBuffer)(x, y), pso.DepthFunc)) {
+      if (!TestImpl(depth, (*input.DepthBuffer)(x, y), pso.DepthTest)) {
         return;
       }
       (*input.DepthBuffer)(x, y) = depth;
     }
     LerpProperties(delta, outA.GetPointer(), outB.GetPointer(), psIn.GetPointer(), len);
-    cb(x, y) = pso.PS(psParam);
+    bool isDiscard = false;
+    Color4f src = pso.PS(psParam, isDiscard);
+    if (isDiscard) {
+      return;
+    }
+    if (pso.IsUseAlphaTest) {
+      if (!TestImpl(src.A(), cb(x, y).A(), pso.AlphaTest)) {
+        return;
+      }
+    }
+    if (pso.IsUseBlend) {
+      Color4f dst = cb(x, y);
+      cb(x, y) = Blend(pso, src, dst);
+    } else {
+      cb(x, y) = src;
+    }
   };
   uint32_t x1 = a.X(), y1 = a.Y(), x2 = b.X(), y2 = b.Y();
   if (x1 == x2 && y1 == y2) {
@@ -446,12 +521,13 @@ void Renderer::DrawTriangle(
           //插值深度
           float depth = InterpolateDepth(bary, depthZ);
           //深度测试
-          if (input.DepthBuffer != nullptr) {
-            if (!DepthTest(depth, (*input.DepthBuffer)(x, y), pso.DepthFunc)) {
+          if (input.DepthBuffer != nullptr && pso.IsUseDepthTest) {
+            auto& db = *input.DepthBuffer;
+            if (!TestImpl(depth, db(x, y), pso.DepthTest)) {
               continue;
             }
             //更新深度值
-            (*input.DepthBuffer)(x, y) = depth;
+            db(x, y) = depth;
           }
           //插值顶点属性。透视矫正，使用inv w作为权重
           Vector3f weight = invW * bary;
@@ -461,11 +537,51 @@ void Renderer::DrawTriangle(
             pixelInput[i] = sum * normalize;
           }
           //使用插值后的结果计算像素颜色
+          auto& cb = *input.ColorBuffer;
           PixelShaderParams psParam{psIn.GetPointer(), input.CBuffer};
-          Color4f color = pso.PS(psParam);
-          (*input.ColorBuffer)(x, y) = color;
+          bool isDiscard = false;
+          Color4f src = pso.PS(psParam, isDiscard);
+          if (isDiscard) {  //丢弃PS结果
+            continue;
+          }
+          //alpha测试
+          if (pso.IsUseAlphaTest) {
+            if (!TestImpl(src.A(), cb(x, y).A(), pso.AlphaTest)) {
+              continue;
+            }
+          }
+          if (pso.IsUseBlend) {
+            Color4f dst = cb(x, y);
+            //混合
+            cb(x, y) = Blend(pso, src, dst);
+          } else {
+            cb(x, y) = src;
+          }
         }
       }
     }
   }
+}
+
+PipelineState Renderer::DefaultPSO(VertexShader vs, PixelShader ps, size_t vertexSize, size_t outSize) noexcept {
+  PipelineState pso;
+  pso.VS = vs;
+  pso.PS = ps;
+  pso.VertexSize = vertexSize;
+  pso.OutLayout = {outSize};
+  pso.IsDrawFrame = false;
+  pso.IsUseDepthTest = true;
+  pso.DepthTest = TestComparison::Less;
+  pso.Cull = CullMode::None;
+  pso.FrontOrder = FrontFace::CCW;
+  pso.IsUseBlend = false;
+  pso.BlendSrcFactorRGB = BlendColor::One;
+  pso.BlendDstFactorRGB = BlendColor::Zero;
+  pso.BlendSrcFactorA = BlendColor::One;
+  pso.BlendDstFactorA = BlendColor::Zero;
+  pso.BlendOp = BlendEquation::Add;
+  pso.BlendColorConstant = Color4f(0.0f);
+  pso.IsUseAlphaTest = false;
+  pso.AlphaTest = TestComparison::Always;
+  return pso;
 }

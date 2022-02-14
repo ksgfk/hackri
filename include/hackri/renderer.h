@@ -34,11 +34,11 @@ struct PixelShaderParams {
 //返回齐次空间下的坐标
 using VertexShader = std::function<Vector4f(int, VertexShaderParams&)>;
 //PS没啥好说的，很正常的输入输出
-using PixelShader = std::function<Color4f(PixelShaderParams&)>;
+using PixelShader = std::function<Color4f(const PixelShaderParams&, bool&)>;
 struct VertexShaderOutLayout {
   size_t Size;  //输出数据大小（字节），必须是sizeof(float)的整数倍
 };
-enum class DepthComparison {
+enum class TestComparison {
   Never,
   Less,
   Equal,
@@ -58,17 +58,52 @@ enum class FrontFace {
   CCW,  //counter clock wise逆时针
   CW
 };
+enum class BlendColor {
+  Zero,
+  One,
+  SrcColor,
+  OneMinusSrcColor,
+  DstColor,
+  OneMinusDstColor,
+  SrcAlpha,
+  OneMinusSrcAlpha,
+  DstAlpha,
+  OneMinusDstAlpha,
+  ConstantColor,
+  OneMinusConstantColor,
+  ConstantAlpha,
+  OneMinusConstantAlpha
+};
+enum class BlendEquation {
+  Add,
+  Sub,
+  RevSub
+};
 //名字取自DX12的PSO（233
 struct PipelineState {
   VertexShader VS;
   PixelShader PS;
-  size_t VertexSize;                                  //一个顶点大小（字节）
-  VertexShaderOutLayout OutLayout;                    //顶点着色器输出的布局
-  size_t CBufferSize;                                 //cbuffer大小
-  bool IsDrawFrame = false;                           //是不是线框模式
-  DepthComparison DepthFunc = DepthComparison::Less;  //深度比较
-  CullMode Cull = CullMode::None;
-  FrontFace FrontOrder = FrontFace::CCW;
+  size_t VertexSize;                //一个顶点大小（字节）
+  VertexShaderOutLayout OutLayout;  //顶点着色器输出的布局
+
+  bool IsDrawFrame = false;  //是不是线框模式
+
+  bool IsUseDepthTest = true;
+  TestComparison DepthTest = TestComparison::Less;  //深度比较
+
+  CullMode Cull = CullMode::None;         //面剔除设置
+  FrontFace FrontOrder = FrontFace::CCW;  //面顶点顺序
+
+  bool IsUseBlend = false;  //是否启用颜色混合，src代表PS结果，dst代表缓冲内的结果
+  BlendColor BlendSrcFactorRGB = BlendColor::One;
+  BlendColor BlendDstFactorRGB = BlendColor::Zero;
+  BlendColor BlendSrcFactorA = BlendColor::One;
+  BlendColor BlendDstFactorA = BlendColor::Zero;
+  BlendEquation BlendOp = BlendEquation::Add;
+  Color4f BlendColorConstant = Color4f(0.0f);
+
+  bool IsUseAlphaTest = false;  //alpha测试
+  TestComparison AlphaTest = TestComparison::Always;
 };
 struct PipelineInput {
   uint8_t* Vertex;   //顶点数据输入
@@ -134,6 +169,10 @@ class Renderer {
       const PipelineInput& input,
       const PipelineState& pso,
       PipelineMemory& memory);
+
+  static PipelineState DefaultPSO(
+      VertexShader vs, PixelShader ps,
+      size_t vertexSize, size_t outSize) noexcept;
 };
 }  // namespace hackri
 

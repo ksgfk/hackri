@@ -11,3 +11,4 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(HACKRI_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_subdirectory("hackri")
+add_subdirectory("app")

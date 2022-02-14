@@ -1,7 +1,6 @@
 ﻿cmake_minimum_required (VERSION 3.8)
 
-add_executable(hackri
-    "main.cpp"
+add_library(hackri STATIC
     "color.cpp"
     "buffer.cpp"
     "image.cpp"

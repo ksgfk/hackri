@@ -13,14 +13,16 @@ namespace hackri {
 template <class T, size_t N>
 class Array {
  public:
+  static_assert(N != 0, "N can't be zero");
+
   using ThisType = Array<T, N>;
-  using ContainerType = std::array<T, N>;
-  using ValueType = typename ContainerType::value_type;
-  using SizeType = typename ContainerType::size_type;
-  using Reference = typename ContainerType::reference;
-  using ConstReference = typename ContainerType::const_reference;
-  using Iterator = typename ContainerType::iterator;
-  using ConstIterator = typename ContainerType::const_iterator;
+  using ContainerType = T[N];
+  using ValueType = typename T;
+  using SizeType = typename size_t;
+  using Reference = typename T&;
+  using ConstReference = typename const T&;
+  using Iterator = typename T*;
+  using ConstIterator = typename const T*;
 
   constexpr static SizeType ContainerSize = N;
 
@@ -30,7 +32,12 @@ class Array {
       _data[i] = value;
     }
   }
-  constexpr Array(std::initializer_list<T> u) { std::copy(u.begin(), u.begin() + N, _data.begin()); }
+  constexpr Array(std::initializer_list<T> u) {
+    auto iter = u.begin();
+    for (size_t i = 0; i < N; i++) {
+      _data[i] = *iter++;
+    }
+  }
   template <class TA, class TB, size_t _N = N, std::enable_if_t<_N == 2, int> = 0>
   constexpr Array(TA a, TB b) noexcept {
     _data[0] = a;
@@ -49,27 +56,35 @@ class Array {
     _data[2] = c;
     _data[3] = d;
   }
-  constexpr Array(const T* arr) noexcept { std::copy(arr, arr + N, _data.begin()); }
+  constexpr Array(const T* arr) noexcept {
+    for (size_t i = 0; i < N; i++) {
+      _data[i] = arr[i];
+    }
+  }
 
-  constexpr size_t ElementCount() const noexcept { return _data.size(); }
-  constexpr Reference operator[](size_t i) noexcept { return _data[i]; }
-  constexpr ConstReference operator[](size_t i) const noexcept { return _data[i]; }
-  constexpr Iterator Data() noexcept { return _data.data(); }
-  constexpr ConstIterator Data() const noexcept { return _data.data(); }
-  constexpr Iterator Begin() noexcept { return _data.begin(); }
-  constexpr ConstIterator Begin() const noexcept { return _data.begin(); }
-  constexpr Iterator End() noexcept { return _data.end(); }
-  constexpr ConstIterator End() const noexcept { return _data.end(); }
-  constexpr Reference Front() noexcept { return _data.front(); }
-  constexpr ConstReference Front() const noexcept { return _data.front(); }
-  constexpr Reference Back() noexcept { _data.back(); }
-  constexpr ConstReference Back() const noexcept { return _data.back(); }
+  constexpr size_t ElementCount() const noexcept { return ContainerSize; }
+  constexpr Reference operator[](size_t i) { return _data[i]; }
+  constexpr ConstReference operator[](size_t i) const { return _data[i]; }
+  constexpr Iterator Data() noexcept { return _data; }
+  constexpr ConstIterator Data() const noexcept { return _data; }
+  constexpr Iterator Begin() noexcept { return _data; }
+  constexpr ConstIterator Begin() const noexcept { return _data; }
+  constexpr Iterator End() noexcept { return _data + N; }
+  constexpr ConstIterator End() const noexcept { return _data + N; }
+  constexpr Reference Front() noexcept { return _data[0]; }
+  constexpr ConstReference Front() const noexcept { return _data[0]; }
+  constexpr Reference Back() noexcept { return _data[N - 1]; }
+  constexpr ConstReference Back() const noexcept { return _data[N - 1]; }
   constexpr void Fill(const ValueType& value) noexcept {
     for (size_t i = 0; i < N; i++) {
       _data[i] = value;
     }
   }
-  constexpr void Swap(Array& other) noexcept { _data.swap(other._data); }
+  constexpr void Swap(Array& other) noexcept {
+    for (size_t i = 0; i < N; i++) {
+      std::swap(_data[i], other[i]);
+    }
+  }
 
   template <size_t S = N, std::enable_if_t<(S >= 1), int> = 0>
   constexpr ConstReference X() const noexcept { return _data[0]; }
@@ -321,7 +336,7 @@ constexpr Array<T, N> Project(const Array<T, N>& u, const Array<T, N>& v) noexce
 }
 template <class T, size_t N>  //如果把u向量分解成a1和a2，a1是v方向上的投影，a2就是Reject运算
 constexpr Array<T, N> Reject(const Array<T, N>& u, const Array<T, N>& v) noexcept {
-  return (u - v * Array<T, N>(Dot(u, v) / Dot(v, v)));
+  return u - v * (Dot(u, v) / v.LengthSquared());
 }
 }  // namespace hackri
 
